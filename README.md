@@ -7,13 +7,17 @@ and every new instance bootstraps my dev environment automatically.
 ## What it installs
 
 - **zsh + oh-my-zsh**, set as the default shell, with a managed `~/.zshrc` block
-  (PATH, `EDITOR=nvim`, auto-activate `/venv/main`, handy aliases).
+  (PATH, `EDITOR=nvim`, auto-activate `/venv/main`, provisioned credentials,
+  handy aliases).
 - **tmux** with a sensible `~/.tmux.conf` (Ctrl-a prefix, mouse, vim pane nav,
   `|`/`-` splits, 256-color/RGB).
 - **Neovim** (latest stable, fetched from GitHub releases — apt's is too old) +
   **LazyVim** starter, with plugins pre-synced headlessly.
 - **Modern CLI tools**: ripgrep, fd, fzf, bat, lazygit.
 - **uv** (fast Python package manager).
+- **GitHub CLI** (`gh`, from GitHub's own apt repo), optionally pre-authenticated.
+- **Claude Code** (native installer — no Node required), optionally
+  pre-authenticated.
 
 ## How vast.ai runs it
 
@@ -46,6 +50,24 @@ run Supervisor + the Instance Portal). The script is:
 3. Launch an instance from that template. Watch progress in the Instance Portal
    (or `tail -f /var/log/portal/provisioning.log`).
 4. SSH in and run `exec zsh` (or just open a new shell) to pick up the config.
+
+## gh and Claude Code credentials
+
+Both tools are installed unconditionally; authentication is optional and, like
+the R2 setup below, driven entirely by **vast.ai template env vars** — no
+secrets live in this repo.
+
+| Env var                  | Effect                                                                |
+| ------------------------ | --------------------------------------------------------------------- |
+| `GH_TOKEN` / `GITHUB_TOKEN` | Logs `gh` in non-interactively and runs `gh auth setup-git`, so HTTPS `git push` works too. Persisted to `~/.config/gh/hosts.yml`. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code auth token — generate one with `claude setup-token` on a machine you're already logged in on. |
+| `ANTHROPIC_API_KEY`      | Alternative to the above: a `console.anthropic.com` API key.           |
+
+The Claude Code variables are written to `~/.config/remote-provisioning/env.sh`
+(mode `600`), which the managed `~/.zshrc` block sources — so they're easy to
+rotate or `rm` without touching `.zshrc`, and they're never baked into the shell
+config itself. If neither is set, just run `claude` once and log in
+interactively; likewise `gh auth login` for GitHub.
 
 ## Cloudflare R2 credentials (for the `corroborate` project)
 

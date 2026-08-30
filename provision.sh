@@ -12,7 +12,8 @@
 # but every step below is written to be idempotent so a partial re-run is safe.
 #
 # Sets up: zsh + oh-my-zsh, tmux (sensible config), neovim (latest stable) +
-# LazyVim, modern CLI tools (ripgrep, fd, fzf, bat, lazygit), and uv.
+# LazyVim, modern CLI tools (ripgrep, fd, fzf, bat, lazygit), uv, the GitHub
+# CLI (gh), and Claude Code.
 
 set -euo pipefail
 
@@ -123,6 +124,9 @@ export VISUAL=nvim
 # Activate the vast.ai venv automatically if present.
 [ -f /venv/main/bin/activate ] && source /venv/main/bin/activate
 
+# Provisioned credentials (Claude Code tokens, etc.) — 0600, written by provision.sh.
+[ -f "$HOME/.config/remote-provisioning/env.sh" ] && source "$HOME/.config/remote-provisioning/env.sh"
+
 alias vi=nvim
 alias vim=nvim
 alias ll='ls -alh'
@@ -196,7 +200,80 @@ nvim --headless "+Lazy! sync" +qa 2>&1 | tail -5 || \
   log "Plugin sync hit an error; it will finish on first interactive launch."
 
 # ----------------------------------------------------------------------------
-# 7. Cloudflare R2 credentials for the ../corroborate project
+# 7. GitHub CLI (gh)
+#
+#    apt's `gh` is usually stale (or absent), so use GitHub's own apt repo.
+# ----------------------------------------------------------------------------
+if ! have gh; then
+  log "Installing GitHub CLI from cli.github.com apt repo"
+  install -d -m 755 /etc/apt/keyrings
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list
+  apt-get update -y
+  apt-get install -y --no-install-recommends gh
+fi
+have gh && log "gh: $(gh --version | head -1)" || log "gh install failed — continuing."
+
+# Authenticate non-interactively if a token was supplied as a template env var.
+# `gh auth login --with-token` persists it to ~/.config/gh/hosts.yml, so it
+# survives beyond this provisioning shell (unlike the env var itself).
+gh_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+if [ -n "$gh_token" ]; then
+  if gh auth status >/dev/null 2>&1; then
+    log "gh already authenticated — skipping login"
+  else
+    log "Authenticating gh with the supplied token"
+    printf '%s' "$gh_token" | gh auth login --with-token
+    gh auth setup-git   # use gh as git's credential helper for HTTPS remotes
+  fi
+else
+  log "GH_TOKEN / GITHUB_TOKEN not set — run 'gh auth login' manually."
+fi
+
+# ----------------------------------------------------------------------------
+# 8. Claude Code
+#
+#    The native installer needs no Node/npm and drops the binary in
+#    ~/.local/bin, which the managed .zshrc block already puts on PATH.
+# ----------------------------------------------------------------------------
+if ! have claude && [ ! -x "$HOME/.local/bin/claude" ]; then
+  log "Installing Claude Code"
+  curl -fsSL https://claude.ai/install.sh | bash
+fi
+export PATH="$HOME/.local/bin:$PATH"
+if have claude; then
+  log "Claude Code: $(claude --version 2>/dev/null || echo installed)"
+else
+  log "Claude Code install failed — continuing."
+fi
+
+# Auth token, if supplied as a template env var. Kept out of ~/.zshrc and in a
+# 0600 file that the managed block sources, so it is easy to rotate or delete.
+#   CLAUDE_CODE_OAUTH_TOKEN — from `claude setup-token` on a machine you own
+#   ANTHROPIC_API_KEY       — a console.anthropic.com API key
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  log "Writing Claude Code credentials to ~/.config/remote-provisioning/env.sh"
+  mkdir -p "$HOME/.config/remote-provisioning"
+  cred_file="$HOME/.config/remote-provisioning/env.sh"
+  ( umask 077
+    : > "$cred_file"
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+      printf 'export CLAUDE_CODE_OAUTH_TOKEN=%q\n' "$CLAUDE_CODE_OAUTH_TOKEN" >> "$cred_file"
+    fi
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+      printf 'export ANTHROPIC_API_KEY=%q\n' "$ANTHROPIC_API_KEY" >> "$cred_file"
+    fi
+  )
+  chmod 600 "$cred_file"
+else
+  log "No Claude Code token set — run 'claude' once to log in interactively."
+fi
+
+# ----------------------------------------------------------------------------
+# 9. Cloudflare R2 credentials for the ../corroborate project
 #
 #    Secrets are NEVER stored in this script (it lives at a public raw URL).
 #    They come from vast.ai *template env vars*, set on the template:
